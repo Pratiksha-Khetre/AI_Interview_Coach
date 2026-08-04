@@ -1,0 +1,16 @@
+# Backend
+Backend/.venv/
+Backend/uploads/
+Backend/vector_store/
+Backend/.env
+Backend/__pycache__/
+
+# Frontend
+Frontend/node_modules/
+Frontend/dist/
+
+# VS Code
+.vscode/
+
+# Python
+*.pyc
