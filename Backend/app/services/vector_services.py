@@ -25,7 +25,7 @@ def load_vector_store(resume_id : str) -> FAISS:
 
     store_dir = Path("vector_store") / resume_id
 
-    vector_store = FAISS.load_local(store_dir, EMBEDDDING_MODEL, allow_dangerous_centralization = True)
+    vector_store = FAISS.load_local(store_dir, EMBEDDDING_MODEL, allow_dangerous_deserialization= True)
 
     return vector_store
 
