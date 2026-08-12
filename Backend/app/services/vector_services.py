@@ -2,10 +2,12 @@
 
 from langchain_community.vectorstores import FAISS
 from langchain_core.documents import Document
-from langchain_community.embeddings import HuggingFaceEmbeddings
 from pathlib import Path
+from langchain_huggingface import HuggingFaceEmbeddings
 
-EMBEDDDING_MODEL = HuggingFaceEmbeddings(model_name = "sentence-transformers/all-MiniLM-L6-v2")
+EMBEDDING_MODEL = HuggingFaceEmbeddings(
+    model_name="sentence-transformers/all-MiniLM-L6-v2"
+)
 
 def create_vector_store(documents : list[Document]):
     vector_store = FAISS.from_documents(documents, EMBEDDDING_MODEL)       #FAISS stores associated documets + embeddings
