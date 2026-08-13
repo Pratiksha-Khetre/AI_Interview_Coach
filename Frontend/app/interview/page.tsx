@@ -13,6 +13,8 @@ const ACTIVE_INTERVIEW_KEY = "activeInterview";
 // BACKEND TYPES
 // ============================================================
 
+console.log("🔥 API BASE URL:", API_BASE_URL);
+
 type BackendQuestion = {
   question: string;
   answer: string | null;
