@@ -1,7 +1,7 @@
 # Backend\app\services\parser_service.py
 
 from pathlib import Path
-import fitz
+import pymupdf
 
 def parse_resume(file_path : Path) -> str:
 
