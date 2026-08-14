@@ -6,14 +6,13 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL;
+console.log("🔥 API URL:", API_BASE_URL);
 
 const ACTIVE_INTERVIEW_KEY = "activeInterview";
 
-// ============================================================
 // BACKEND TYPES
 // ============================================================
 
-console.log("🔥 API BASE URL:", API_BASE_URL);
 
 type BackendQuestion = {
   question: string;
