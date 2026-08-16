@@ -8,7 +8,7 @@ def parse_resume(file_path : Path) -> str:
     text = ""
 
     try:
-        doc = fitz.open(file_path)
+        doc = pymupdf.open(file_path)
         for page in doc:
             text += page.get_text()
     finally:
