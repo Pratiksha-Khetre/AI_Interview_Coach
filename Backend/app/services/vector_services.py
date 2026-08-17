@@ -1,52 +1,75 @@
-from langchain_community.vectorstores import FAISS
-from langchain_core.documents import Document
-from langchain_huggingface import HuggingFaceEmbeddings
 from pathlib import Path
+import pickle
+
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+
+from langchain_core.documents import Document
 
 
-_embedding_model = None
-
-
-def get_embedding_model():
-    global _embedding_model
-
-    if _embedding_model is None:
-        _embedding_model = HuggingFaceEmbeddings(
-            model_name="sentence-transformers/all-MiniLM-L6-v2"
-        )
-
-    return _embedding_model
+VECTOR_STORE_DIR = Path("vector_store")
 
 
 def create_vector_store(documents: list[Document]):
-    embedding_model = get_embedding_model()
 
-    vector_store = FAISS.from_documents(
-        documents,
-        embedding_model
+    texts = [doc.page_content for doc in documents]
+
+    vectorizer = TfidfVectorizer(
+        stop_words="english",
+        max_features=5000
     )
 
-    return vector_store
+    vectors = vectorizer.fit_transform(texts)
+
+    return {
+        "documents": documents,
+        "vectorizer": vectorizer,
+        "vectors": vectors
+    }
 
 
-def save_vector_store(vector_store: FAISS, resume_id: str) -> None:
+def save_vector_store(vector_store, resume_id: str):
 
-    store_dir = Path("vector_store") / resume_id
+    store_dir = VECTOR_STORE_DIR / resume_id
     store_dir.mkdir(parents=True, exist_ok=True)
 
-    vector_store.save_local(store_dir)
+    with open(store_dir / "store.pkl", "wb") as f:
+        pickle.dump(vector_store, f)
 
 
-def load_vector_store(resume_id: str) -> FAISS:
+def load_vector_store(resume_id: str):
 
-    store_dir = Path("vector_store") / resume_id
+    store_dir = VECTOR_STORE_DIR / resume_id
 
-    embedding_model = get_embedding_model()
+    with open(store_dir / "store.pkl", "rb") as f:
+        return pickle.load(f)
 
-    vector_store = FAISS.load_local(
-        store_dir,
-        embedding_model,
-        allow_dangerous_deserialization=True
-    )
 
-    return vector_store
+def search_vector_store(
+    vector_store,
+    query: str,
+    k: int = 5
+):
+
+    vectorizer = vector_store["vectorizer"]
+    vectors = vector_store["vectors"]
+    documents = vector_store["documents"]
+
+    query_vector = vectorizer.transform([query])
+
+    similarities = cosine_similarity(
+        query_vector,
+        vectors
+    )[0]
+
+    top_indices = similarities.argsort()[-k:][::-1]
+
+    results = []
+
+    for index in top_indices:
+        results.append({
+            "document": documents[index],
+            "score": float(similarities[index])
+        })
+
+    return results
