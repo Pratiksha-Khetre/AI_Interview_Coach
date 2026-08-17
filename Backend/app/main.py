@@ -16,13 +16,13 @@ def health():
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:3000"
+        "http://localhost:3000",
+        "https://ai-interview-coach1011-qplj.vercel.app",
     ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 
 app.include_router(interview_router)
 app.include_router(resume_router)
