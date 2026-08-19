@@ -50,11 +50,17 @@ def submit_answer(interview: InterviewAnswer):
     # --------------------------------------------------------
     # Save answer only.
     # No evaluation during the interview.
+    #
+    # answer_duration (seconds) comes from the frontend's
+    # per-question timer. It defaults to 0 on the schema, so
+    # this stays backward compatible with any client that
+    # doesn't send it.
     # --------------------------------------------------------
 
     interview_session_service.submit_answer(
         interview.interview_id,
-        interview.answer
+        interview.answer,
+        interview.answer_duration
     )
 
     # --------------------------------------------------------

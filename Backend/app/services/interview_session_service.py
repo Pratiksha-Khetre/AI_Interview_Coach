@@ -6,6 +6,7 @@ from app.schemas import interview
 from app.services import (
     answer_evaluation_service,
     report_service,
+    communication_metrics_service,
 )
 
 
@@ -138,6 +139,7 @@ def get_interview_history() -> list[
 def submit_answer(
     interview_id: str,
     answer: str,
+    answer_duration: int = 0,
 ):
 
     session = get_session(
@@ -158,11 +160,33 @@ def submit_answer(
     # Save candidate answer only.
     #
     # IMPORTANT:
-    # We DO NOT evaluate here.
-    # Evaluation happens after all questions are answered.
+    # We DO NOT run the AI evaluation here.
+    # That still happens after all questions are answered,
+    # in evaluate_all_answers() / complete_session().
     # --------------------------------------------------------
 
     current_question.answer = answer
+
+    # --------------------------------------------------------
+    # Communication metrics (timing, word count, WPM, filler
+    # words). Computed here, per-answer, so they're available
+    # immediately and can be aggregated into the final report
+    # later without re-processing every answer at completion.
+    # --------------------------------------------------------
+
+    metrics = (
+        communication_metrics_service
+        .compute_answer_metrics(
+            answer=answer,
+            duration_seconds=answer_duration,
+        )
+    )
+
+    current_question.answer_duration = answer_duration
+    current_question.word_count = metrics["word_count"]
+    current_question.wpm = metrics["wpm"]
+    current_question.filler_word_count = metrics["filler_word_count"]
+    current_question.filler_words = metrics["filler_words"]
 
     save_session(
         session
@@ -271,6 +295,10 @@ def complete_session(
 
     # --------------------------------------------------------
     # Generate final interview report
+    #
+    # (report_service now also aggregates the communication
+    # metrics collected per-answer during submit_answer, and
+    # attaches them as report.communication_analysis)
     # --------------------------------------------------------
 
     report = (

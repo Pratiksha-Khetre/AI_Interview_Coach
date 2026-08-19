@@ -2,8 +2,41 @@
 
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+
+interface SpeechRecognitionEvent extends Event {
+  results: SpeechRecognitionResultList;
+  resultIndex: number;
+}
+
+interface SpeechRecognitionErrorEvent extends Event {
+  error: string;
+}
+
+interface SpeechRecognitionInstance {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+
+  start: () => void;
+  stop: () => void;
+
+  onresult: ((event: SpeechRecognitionEvent) => void) | null;
+  onerror: ((event: SpeechRecognitionErrorEvent) => void) | null;
+  onend: (() => void) | null;
+}
+
+interface SpeechRecognitionConstructor {
+  new (): SpeechRecognitionInstance;
+}
+
+declare global {
+  interface Window {
+    SpeechRecognition?: SpeechRecognitionConstructor;
+    webkitSpeechRecognition?: SpeechRecognitionConstructor;
+  }
+}
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL;
 console.log("🔥 API URL:", API_BASE_URL);
@@ -13,11 +46,18 @@ const ACTIVE_INTERVIEW_KEY = "activeInterview";
 // BACKEND TYPES
 // ============================================================
 
-
 type BackendQuestion = {
   question: string;
   answer: string | null;
   evaluation: string | null;
+
+  // Communication metrics (optional — only present once an answer
+  // for this question has actually been submitted).
+  answer_duration?: number | null;
+  word_count?: number | null;
+  wpm?: number | null;
+  filler_word_count?: number | null;
+  filler_words?: Record<string, number> | null;
 };
 
 type BackendInterviewSession = {
@@ -32,12 +72,21 @@ type BackendInterviewSession = {
   status: string;
 };
 
+type CommunicationAnalysis = {
+  average_answer_duration: number;
+  average_wpm: number;
+  total_filler_words: number;
+  most_common_filler_word: string | null;
+  answers_analyzed: number;
+};
+
 type InterviewReport = {
   correctness: number;
   clarity: number;
   completeness: number;
   relevance: number;
   overall_score: number;
+  communication_analysis?: CommunicationAnalysis | null;
 };
 
 type ActiveInterviewRecord = {
@@ -148,6 +197,37 @@ export default function InterviewPage() {
 
   const [answer, setAnswer] = useState("");
 
+  // ------------------------------------------------------------
+  // SPEECH TO TEXT
+  // ------------------------------------------------------------
+
+  const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
+
+  // Snapshot of the textarea value at the moment listening started.
+  // New speech is appended after this, so anything the user typed
+  // (or a previous dictation) is preserved instead of overwritten.
+  const baseAnswerRef = useRef("");
+
+  // Accumulates only the *finalized* speech segments for the current
+  // listening session, so interim (in-progress) results never get
+  // permanently baked into the answer or duplicated.
+  const finalTranscriptRef = useRef("");
+
+  const [isListening, setIsListening] = useState(false);
+  const [speechSupported, setSpeechSupported] = useState(true);
+  const [micError, setMicError] = useState("");
+
+  // ------------------------------------------------------------
+  // PER-QUESTION ANSWER TIMER
+  // ------------------------------------------------------------
+  //
+  // Separate from the overall interview countdown timer below.
+  // Tracks how long the user spends on the *current* question,
+  // starting fresh each time a new question is displayed.
+
+  const [answerSeconds, setAnswerSeconds] = useState(0);
+  const answerTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState("");
 
@@ -173,6 +253,188 @@ export default function InterviewPage() {
   const [timeExpired, setTimeExpired] = useState(false);
 
   const isLastQuestion = totalQuestions > 0 && questionNumber >= totalQuestions;
+
+  // ============================================================
+  // SPEECH RECOGNITION SETUP (runs once on mount)
+  // ============================================================
+
+  useEffect(() => {
+    const SpeechRecognition =
+      window.SpeechRecognition || window.webkitSpeechRecognition;
+
+    if (!SpeechRecognition) {
+      setSpeechSupported(false);
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = "en-US";
+
+    // --------------------------------------------------------
+    // HANDLE RECOGNIZED SPEECH
+    // --------------------------------------------------------
+    //
+    // Only finalized results are permanently appended to the
+    // answer. Interim (not-yet-final) results are shown live but
+    // get replaced on every event instead of being appended, so
+    // nothing is duplicated.
+    //
+    recognition.onresult = (event: SpeechRecognitionEvent) => {
+      let interimTranscript = "";
+
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const result = event.results[i];
+        const transcript = result[0].transcript;
+
+        if (result.isFinal) {
+          finalTranscriptRef.current += `${transcript} `;
+        } else {
+          interimTranscript += transcript;
+        }
+      }
+
+      const base = baseAnswerRef.current;
+      const needsSpace = base.length > 0 && !base.endsWith(" ");
+      const separator = needsSpace ? " " : "";
+
+      setAnswer(
+        `${base}${separator}${finalTranscriptRef.current}${interimTranscript}`,
+      );
+    };
+
+    // --------------------------------------------------------
+    // HANDLE ERRORS (never crash the page)
+    // --------------------------------------------------------
+
+    recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
+      setIsListening(false);
+
+      switch (event.error) {
+        case "not-allowed":
+        case "service-not-allowed":
+          setMicError("Microphone permission denied.");
+          break;
+
+        case "no-speech":
+          setMicError("No speech detected.");
+          break;
+
+        case "audio-capture":
+          setMicError("No microphone was found.");
+          break;
+
+        case "network":
+          setMicError("Network error during speech recognition.");
+          break;
+
+        default:
+          setMicError("Speech recognition error. Please try again.");
+      }
+    };
+
+    // --------------------------------------------------------
+    // HANDLE RECOGNITION ENDING
+    // --------------------------------------------------------
+    //
+    // Prevents the UI from getting stuck showing "Listening..."
+    // if the browser stops recognition on its own.
+    //
+    recognition.onend = () => {
+      setIsListening(false);
+    };
+
+    recognitionRef.current = recognition;
+
+    // --------------------------------------------------------
+    // CLEANUP ON UNMOUNT
+    // --------------------------------------------------------
+
+    return () => {
+      recognition.stop();
+      recognitionRef.current = null;
+    };
+  }, []);
+
+  // ============================================================
+  // START / STOP MICROPHONE
+  // ============================================================
+
+  const startListening = () => {
+    if (!speechSupported || !recognitionRef.current || isListening) {
+      return;
+    }
+
+    setMicError("");
+
+    // Reset the session accumulators. baseAnswerRef captures whatever
+    // is already in the textarea (typed text or a prior dictation) so
+    // new speech is appended, never overwritten.
+    baseAnswerRef.current = answer;
+    finalTranscriptRef.current = "";
+
+    try {
+      recognitionRef.current.start();
+      setIsListening(true);
+    } catch (error) {
+      console.error("Speech recognition start error:", error);
+      setMicError("Unable to start microphone.");
+    }
+  };
+
+  const stopListening = () => {
+    if (!recognitionRef.current || !isListening) {
+      return;
+    }
+
+    recognitionRef.current.stop();
+    setIsListening(false);
+  };
+
+  const toggleListening = () => {
+    if (isListening) {
+      stopListening();
+    } else {
+      startListening();
+    }
+  };
+
+  // ============================================================
+  // PER-QUESTION ANSWER TIMER
+  // ============================================================
+  //
+  // Starts (from 0) whenever a new question becomes active while
+  // the interview is in progress, and is cleaned up whenever the
+  // question changes, the stage changes, or the component unmounts
+  // — so it never keeps ticking in the background.
+
+  useEffect(() => {
+    if (stage !== "active" || !question) {
+      return;
+    }
+
+    setAnswerSeconds(0);
+
+    answerTimerRef.current = setInterval(() => {
+      setAnswerSeconds((previous) => previous + 1);
+    }, 1000);
+
+    return () => {
+      if (answerTimerRef.current) {
+        clearInterval(answerTimerRef.current);
+        answerTimerRef.current = null;
+      }
+    };
+  }, [stage, question]);
+
+  const stopAnswerTimer = () => {
+    if (answerTimerRef.current) {
+      clearInterval(answerTimerRef.current);
+      answerTimerRef.current = null;
+    }
+  };
 
   // ============================================================
   // RESTORE INTERVIEW AFTER REFRESH
@@ -570,6 +832,19 @@ export default function InterviewPage() {
       return;
     }
 
+    // If the mic is still active, stop it first so the final
+    // transcript is settled before we read `answer`.
+    if (isListening) {
+      stopListening();
+    }
+
+    // Stop the per-question timer immediately so it doesn't keep
+    // ticking while the request is in flight. The elapsed value is
+    // read into a local constant below, before any async work.
+    stopAnswerTimer();
+
+    const elapsedAnswerSeconds = answerSeconds;
+
     if (!answer.trim()) {
       return;
     }
@@ -594,6 +869,7 @@ export default function InterviewPage() {
         body: JSON.stringify({
           interview_id: interviewId,
           answer: answer.trim(),
+          answer_duration: elapsedAnswerSeconds,
         }),
       });
 
@@ -662,6 +938,12 @@ export default function InterviewPage() {
   const handleNewInterview = () => {
     clearActiveInterview();
 
+    if (isListening) {
+      stopListening();
+    }
+
+    stopAnswerTimer();
+
     // Resume
     setResumeId("");
 
@@ -691,6 +973,8 @@ export default function InterviewPage() {
 
     setAnswer("");
 
+    setAnswerSeconds(0);
+
     // Loading/errors
     setStarting(false);
 
@@ -701,6 +985,8 @@ export default function InterviewPage() {
     setSubmitError("");
 
     setRestoreError("");
+
+    setMicError("");
 
     // Report
     setFinalReport(null);
@@ -1128,9 +1414,15 @@ export default function InterviewPage() {
               {/* ANSWER INPUT */}
 
               <div>
-                <label className="mb-3 block text-sm font-medium text-zinc-300">
-                  Your answer
-                </label>
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <label className="block text-sm font-medium text-zinc-300">
+                    Your answer
+                  </label>
+
+                  <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs font-medium text-zinc-400">
+                    Answer time: {formatTime(answerSeconds)}
+                  </span>
+                </div>
 
                 <textarea
                   placeholder="Take your time and explain your answer clearly..."
@@ -1140,6 +1432,45 @@ export default function InterviewPage() {
                   disabled={submitting}
                   className="w-full resize-none rounded-2xl border border-white/10 bg-black/20 p-5 text-sm leading-7 text-white outline-none transition placeholder:text-zinc-600 focus:border-violet-500/60 focus:ring-4 focus:ring-violet-500/5 disabled:opacity-60"
                 />
+
+                {/* SPEECH TO TEXT */}
+
+                <div className="mt-4 flex flex-wrap items-center gap-3">
+                  {speechSupported ? (
+                    <button
+                      type="button"
+                      onClick={toggleListening}
+                      disabled={submitting}
+                      className={`flex items-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                        isListening
+                          ? "border-red-500/30 bg-red-500/10 text-red-400"
+                          : "border-white/10 bg-white/[0.04] text-zinc-300 hover:bg-white/[0.08]"
+                      }`}
+                    >
+                      {isListening ? (
+                        <>🔴 Stop Listening</>
+                      ) : (
+                        <>🎤 Start Speaking</>
+                      )}
+                    </button>
+                  ) : (
+                    <p className="text-xs text-zinc-600">
+                      Speech recognition is not supported in this browser.
+                    </p>
+                  )}
+
+                  {isListening && (
+                    <span className="text-xs font-medium text-violet-400">
+                      🎙️ Listening...
+                    </span>
+                  )}
+                </div>
+
+                {micError && (
+                  <div className="mt-3 rounded-xl border border-yellow-500/20 bg-yellow-500/[0.05] px-4 py-3">
+                    <p className="text-sm text-yellow-400">{micError}</p>
+                  </div>
+                )}
 
                 {/* SUBMIT ERROR */}
 
@@ -1235,6 +1566,83 @@ export default function InterviewPage() {
                 </div>
               ))}
             </div>
+
+            {/* COMMUNICATION ANALYSIS */}
+
+            {finalReport.communication_analysis && (
+              <div className="mt-6 rounded-3xl border border-white/10 bg-white/[0.035] p-8 backdrop-blur-xl">
+                <p className="text-sm font-medium text-violet-400">
+                  COMMUNICATION ANALYSIS
+                </p>
+
+                <h3 className="mt-2 text-xl font-semibold">How you sounded</h3>
+
+                <div className="mt-6 grid grid-cols-2 gap-4 md:grid-cols-4">
+                  <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
+                    <p className="text-sm text-zinc-400">Avg. answer time</p>
+
+                    <p className="mt-2 text-2xl font-semibold">
+                      {formatTime(
+                        Math.round(
+                          finalReport.communication_analysis
+                            .average_answer_duration,
+                        ),
+                      )}
+                    </p>
+                  </div>
+
+                  <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
+                    <p className="text-sm text-zinc-400">Avg. pace</p>
+
+                    <p className="mt-2 text-2xl font-semibold">
+                      {finalReport.communication_analysis.average_wpm}
+
+                      <span className="text-sm text-zinc-600"> WPM</span>
+                    </p>
+                  </div>
+
+                  <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
+                    <p className="text-sm text-zinc-400">Filler words</p>
+
+                    <p className="mt-2 text-2xl font-semibold">
+                      {finalReport.communication_analysis.total_filler_words}
+                    </p>
+                  </div>
+
+                  <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
+                    <p className="text-sm text-zinc-400">Most used filler</p>
+
+                    <p className="mt-2 text-2xl font-semibold">
+                      {finalReport.communication_analysis
+                        .most_common_filler_word ?? "—"}
+                    </p>
+                  </div>
+                </div>
+
+                <p className="mt-5 text-sm leading-6 text-zinc-400">
+                  Your average answer time was{" "}
+                  {formatTime(
+                    Math.round(
+                      finalReport.communication_analysis
+                        .average_answer_duration,
+                    ),
+                  )}
+                  , with an average speaking pace of approximately{" "}
+                  {finalReport.communication_analysis.average_wpm} WPM. You used{" "}
+                  {finalReport.communication_analysis.total_filler_words} filler
+                  word
+                  {finalReport.communication_analysis.total_filler_words === 1
+                    ? ""
+                    : "s"}{" "}
+                  across {finalReport.communication_analysis.answers_analyzed}{" "}
+                  answer
+                  {finalReport.communication_analysis.answers_analyzed === 1
+                    ? ""
+                    : "s"}
+                  .
+                </p>
+              </div>
+            )}
 
             {/* ACTIONS */}
 
