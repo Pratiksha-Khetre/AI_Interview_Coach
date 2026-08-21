@@ -12,21 +12,24 @@ import {
   YAxis,
 } from "recharts";
 
-const data = [
-  { month: "Jan", score: 62 },
-  { month: "Feb", score: 68 },
-  { month: "Mar", score: 66 },
-  { month: "Apr", score: 76 },
-  { month: "May", score: 73 },
-  { month: "Jun", score: 84 },
-  { month: "Jul", score: 88 },
-];
+export interface PerformanceChartPoint {
+  label: string;
+  score: number;
+}
 
-export function PerformanceChart() {
+export function PerformanceChart({ data }: { data: PerformanceChartPoint[] }) {
+  if (data.length === 0) {
+    return (
+      <div className="flex h-64 w-full items-center justify-center rounded-lg border border-dashed border-white/10 text-sm text-slate-500">
+        Complete an interview to see your score trend here.
+      </div>
+    );
+  }
+
   return (
     <div
       className="h-64 w-full"
-      aria-label="Interview performance trend from January to July"
+      aria-label="Interview performance trend over your recent sessions"
     >
       <ResponsiveContainer width="100%" height="100%">
         <LineChart
@@ -39,13 +42,13 @@ export function PerformanceChart() {
             strokeDasharray="4 4"
           />
           <XAxis
-            dataKey="month"
+            dataKey="label"
             axisLine={false}
             tickLine={false}
             tick={{ fill: "var(--muted-foreground)", fontSize: 12 }}
           />
           <YAxis
-            domain={[40, 100]}
+            domain={[0, 100]}
             axisLine={false}
             tickLine={false}
             tick={{ fill: "var(--muted-foreground)", fontSize: 12 }}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import {
@@ -12,8 +12,8 @@ import {
   CircleHelp,
   FileText,
   LayoutDashboard,
+  LogOut,
   Menu,
-  MoreHorizontal,
   Play,
   Plus,
   Search,
@@ -21,7 +21,6 @@ import {
   Sparkles,
   Target,
   TrendingUp,
-  Upload,
   UserRound,
   X,
   Zap,
@@ -29,37 +28,11 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { PerformanceChart } from "@/components/performance-chart";
-
-// ============================================================
-// DEMO DATA
-// ============================================================
-
-const interviews = [
-  {
-    role: "Machine Learning Engineer",
-    type: "Technical",
-    difficulty: "Hard",
-    score: 88,
-    date: "Aug 7, 2026",
-    initials: "ML",
-  },
-  {
-    role: "Software Engineer",
-    type: "Behavioral",
-    difficulty: "Medium",
-    score: 81,
-    date: "Aug 2, 2026",
-    initials: "SE",
-  },
-  {
-    role: "Data Analyst",
-    type: "Mixed",
-    difficulty: "Easy",
-    score: 76,
-    date: "Jul 28, 2026",
-    initials: "DA",
-  },
-];
+import { useAuth } from "@/lib/auth-context";
+import {
+  getUserInterviews,
+  type StoredInterviewReport,
+} from "@/lib/interviews-store";
 
 // ============================================================
 // NAVIGATION
@@ -124,17 +97,191 @@ const navGroups = [
 ];
 
 // ============================================================
+// NAME + FORMAT HELPERS
+// ============================================================
+
+function getInitials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "U";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[1][0]).toUpperCase();
+}
+
+function formatRole(role: string): string {
+  if (!role) return "Unknown Role";
+
+  return role
+    .split(" ")
+    .map((word) => {
+      if (word.toLowerCase() === "ml") return "ML";
+      if (word.toLowerCase() === "ai") return "AI";
+      if (word.toLowerCase() === "hr") return "HR";
+
+      return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+    })
+    .join(" ");
+}
+
+function formatInterviewType(type: string): string {
+  if (!type) return "Unknown";
+
+  const normalized = type.toLowerCase();
+
+  if (normalized === "hr") return "HR";
+  if (normalized === "technical") return "Technical";
+  if (normalized === "managerial") return "Managerial";
+
+  return type.charAt(0).toUpperCase() + type.slice(1).toLowerCase();
+}
+
+function formatDifficultyLabel(difficulty: string): string {
+  if (!difficulty) return "Unknown";
+
+  return difficulty.charAt(0).toUpperCase() + difficulty.slice(1).toLowerCase();
+}
+
+function formatShortDate(
+  timestamp: StoredInterviewReport["completedAt"],
+): string {
+  if (!timestamp) return "—";
+
+  return timestamp.toDate().toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+  });
+}
+
+function average(values: number[]): number {
+  if (values.length === 0) return 0;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function computeStreak(interviews: StoredInterviewReport[]): number {
+  const days = new Set<string>();
+
+  for (const interview of interviews) {
+    if (interview.completedAt) {
+      days.add(interview.completedAt.toDate().toDateString());
+    }
+  }
+
+  let streak = 0;
+  const cursor = new Date();
+
+  while (days.has(cursor.toDateString())) {
+    streak += 1;
+    cursor.setDate(cursor.getDate() - 1);
+  }
+
+  return streak;
+}
+
+// ============================================================
 // AVATAR
 // ============================================================
 
-function Avatar({ small = false }: { small?: boolean }) {
+function Avatar({
+  small = false,
+  initials = "U",
+}: {
+  small?: boolean;
+  initials?: string;
+}) {
   return (
     <div
       className={`flex shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-indigo-400 to-violet-500 font-semibold text-white ${
         small ? "size-8 text-[11px]" : "size-9 text-xs"
       }`}
     >
-      PS
+      {initials}
+    </div>
+  );
+}
+
+// ============================================================
+// PROFILE MENU (clickable avatar -> dropdown)
+// ============================================================
+
+function ProfileMenu() {
+  const router = useRouter();
+  const { user, logout } = useAuth();
+  const [open, setOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  const initials = user?.displayName ? getInitials(user.displayName) : "U";
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    }
+
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  const handleLogout = async () => {
+    setOpen(false);
+    await logout();
+    router.push("/login");
+  };
+
+  return (
+    <div className="relative" ref={menuRef}>
+      <button
+        onClick={() => setOpen((value) => !value)}
+        aria-label="Open profile menu"
+        aria-expanded={open}
+        className="rounded-full outline-none transition focus-visible:ring-2 focus-visible:ring-indigo-400/50"
+      >
+        <Avatar initials={initials} />
+      </button>
+
+      {open && (
+        <div className="absolute right-0 top-full z-50 mt-2 w-56 overflow-hidden rounded-xl border border-white/[0.08] bg-[#151823] py-1.5 shadow-2xl shadow-black/40">
+          <div className="border-b border-white/[0.07] px-3.5 py-3">
+            <p className="truncate text-xs font-semibold text-slate-100">
+              {user?.displayName || "Account"}
+            </p>
+            <p className="truncate text-[11px] text-slate-500">
+              {user?.email ?? ""}
+            </p>
+          </div>
+
+          <button
+            onClick={() => {
+              setOpen(false);
+              router.push("/profile");
+            }}
+            className="flex w-full items-center gap-2.5 px-3.5 py-2.5 text-left text-[13px] text-slate-300 transition-colors hover:bg-white/[0.05] hover:text-slate-100"
+          >
+            <UserRound className="size-[15px]" />
+            Profile
+          </button>
+
+          <button
+            onClick={() => {
+              setOpen(false);
+              router.push("/settings");
+            }}
+            className="flex w-full items-center gap-2.5 px-3.5 py-2.5 text-left text-[13px] text-slate-300 transition-colors hover:bg-white/[0.05] hover:text-slate-100"
+          >
+            <Settings className="size-[15px]" />
+            Settings
+          </button>
+
+          <div className="my-1 border-t border-white/[0.07]" />
+
+          <button
+            onClick={handleLogout}
+            className="flex w-full items-center gap-2.5 px-3.5 py-2.5 text-left text-[13px] text-rose-300 transition-colors hover:bg-rose-500/10"
+          >
+            <LogOut className="size-[15px]" />
+            Log out
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -145,6 +292,10 @@ function Avatar({ small = false }: { small?: boolean }) {
 
 function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
   const router = useRouter();
+  const { user } = useAuth();
+
+  const displayName = user?.displayName || "there";
+  const initials = user?.displayName ? getInitials(user.displayName) : "U";
 
   const handleNavigation = (path: string) => {
     onClose();
@@ -239,19 +390,17 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
           </div>
 
           <div className="flex items-center gap-3 rounded-xl border border-white/[0.08] p-2.5">
-            <Avatar small />
+            <Avatar small initials={initials} />
 
             <div className="min-w-0 flex-1">
               <p className="truncate text-xs font-semibold text-slate-100">
-                Pratiksha
+                {displayName}
               </p>
 
               <p className="truncate text-[11px] text-slate-500">
-                Computer Engineering
+                {user?.email ?? ""}
               </p>
             </div>
-
-            <MoreHorizontal className="size-4 text-slate-500" />
           </div>
         </div>
       </aside>
@@ -292,7 +441,7 @@ function StatCard({
         {value}
       </p>
 
-      <p className="mt-1 text-[11px] text-emerald-400">{note}</p>
+      <p className="mt-1 text-[11px] text-slate-500">{note}</p>
     </div>
   );
 }
@@ -307,13 +456,15 @@ function Progress({ label, value }: { label: string; value: number }) {
       <div className="mb-2 flex justify-between text-xs">
         <span className="text-slate-400">{label}</span>
 
-        <span className="font-semibold text-slate-200">{value}%</span>
+        <span className="font-semibold text-slate-200">
+          {Math.round(value)}%
+        </span>
       </div>
 
       <div className="h-1.5 rounded-full bg-white/[0.08]">
         <div
           className="h-full rounded-full bg-gradient-to-r from-indigo-500 to-violet-400 transition-all duration-1000"
-          style={{ width: `${value}%` }}
+          style={{ width: `${Math.min(100, Math.max(0, value))}%` }}
         />
       </div>
     </div>
@@ -326,15 +477,15 @@ function Progress({ label, value }: { label: string; value: number }) {
 
 function Difficulty({ value }: { value: string }) {
   const tone =
-    value === "Hard"
+    value.toLowerCase() === "hard"
       ? "bg-rose-400/10 text-rose-300"
-      : value === "Medium"
+      : value.toLowerCase() === "medium"
         ? "bg-amber-400/10 text-amber-300"
         : "bg-emerald-400/10 text-emerald-300";
 
   return (
     <span className={`rounded-md px-2 py-1 text-[10px] font-semibold ${tone}`}>
-      {value}
+      {formatDifficultyLabel(value)}
     </span>
   );
 }
@@ -361,7 +512,12 @@ function DashboardHeader({ onMenu }: { onMenu: () => void }) {
           <p className="text-sm font-medium text-slate-200">Dashboard</p>
 
           <p className="mt-0.5 text-[11px] text-slate-500">
-            Tuesday, August 8, 2026
+            {new Date().toLocaleDateString("en-US", {
+              weekday: "long",
+              month: "long",
+              day: "numeric",
+              year: "numeric",
+            })}
           </p>
         </div>
       </div>
@@ -394,7 +550,7 @@ function DashboardHeader({ onMenu }: { onMenu: () => void }) {
 
         <div className="hidden h-5 w-px bg-white/10 sm:block" />
 
-        <Avatar />
+        <ProfileMenu />
       </div>
     </header>
   );
@@ -406,28 +562,115 @@ function DashboardHeader({ onMenu }: { onMenu: () => void }) {
 
 export function Dashboard() {
   const router = useRouter();
+  const { user } = useAuth();
 
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [interviews, setInterviews] = useState<StoredInterviewReport[]>([]);
+  const [loadingInterviews, setLoadingInterviews] = useState(true);
+
+  // ============================================================
+  // LOAD REAL INTERVIEW DATA FROM FIRESTORE
+  // ============================================================
+
+  useEffect(() => {
+    if (!user) {
+      setInterviews([]);
+      setLoadingInterviews(false);
+      return;
+    }
+
+    let cancelled = false;
+    setLoadingInterviews(true);
+
+    getUserInterviews(user.uid)
+      .then((data) => {
+        if (!cancelled) setInterviews(data);
+      })
+      .catch((err) => {
+        console.error("Failed to load interview history:", err);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingInterviews(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
+
+  // ============================================================
+  // DERIVED STATS
+  // ============================================================
+
+  const stats = useMemo(() => {
+    if (interviews.length === 0) {
+      return {
+        count: 0,
+        averageScore: 0,
+        bestScore: 0,
+        streak: 0,
+        skillAverages: {
+          correctness: 0,
+          clarity: 0,
+          completeness: 0,
+          relevance: 0,
+        },
+      };
+    }
+
+    const scores = interviews.map((i) => i.overallScore * 10);
+
+    return {
+      count: interviews.length,
+      averageScore: average(scores),
+      bestScore: Math.max(...scores),
+      streak: computeStreak(interviews),
+      skillAverages: {
+        correctness: average(interviews.map((i) => i.correctness * 10)),
+        clarity: average(interviews.map((i) => i.clarity * 10)),
+        completeness: average(interviews.map((i) => i.completeness * 10)),
+        relevance: average(interviews.map((i) => i.relevance * 10)),
+      },
+    };
+  }, [interviews]);
+
+  const weakestSkill = useMemo(() => {
+    if (interviews.length === 0) return null;
+
+    const labeled: [string, number][] = [
+      ["correctness", stats.skillAverages.correctness],
+      ["clarity", stats.skillAverages.clarity],
+      ["completeness", stats.skillAverages.completeness],
+      ["relevance", stats.skillAverages.relevance],
+    ];
+
+    labeled.sort((a, b) => a[1] - b[1]);
+    return labeled[0];
+  }, [interviews.length, stats.skillAverages]);
+
+  const recentInterviews = interviews.slice(0, 3);
+
+  const chartData = useMemo(() => {
+    // chronological order (oldest -> newest) for a left-to-right trend line
+    return [...interviews].reverse().map((interview) => ({
+      label: formatShortDate(interview.completedAt),
+      score: Math.round(interview.overallScore * 10),
+    }));
+  }, [interviews]);
 
   // ============================================================
   // NAVIGATION HANDLERS
   // ============================================================
 
   const startInterview = () => {
-    console.log("START INTERVIEW BUTTON CLICKED");
-
     router.push("/interview");
   };
 
   const openHistory = () => {
-    console.log("OPEN HISTORY");
-
     router.push("/history");
   };
 
   const openPerformance = () => {
-    console.log("OPEN PERFORMANCE");
-
     router.push("/performance");
   };
 
@@ -451,7 +694,7 @@ export function Dashboard() {
                 </p>
 
                 <h1 className="mt-2 text-2xl font-semibold tracking-tight text-white md:text-3xl">
-                  Good morning, Pratiksha
+                  Hey, {user?.displayName || "there"}
                 </h1>
 
                 <p className="mt-1.5 text-sm text-slate-500">
@@ -459,7 +702,6 @@ export function Dashboard() {
                 </p>
               </div>
 
-              {/* REAL NAVIGATION */}
               <Button
                 onClick={startInterview}
                 className="h-10 rounded-lg bg-indigo-500 px-4 text-xs font-semibold text-white shadow-lg shadow-indigo-500/20 hover:bg-indigo-400"
@@ -489,7 +731,6 @@ export function Dashboard() {
                 </p>
 
                 <div className="mt-6 flex flex-wrap gap-3">
-                  {/* REAL START BUTTON */}
                   <Button
                     onClick={startInterview}
                     className="h-9 rounded-lg bg-indigo-500 px-4 text-xs font-semibold text-white hover:bg-indigo-400"
@@ -498,7 +739,6 @@ export function Dashboard() {
                     <ChevronRight data-icon="inline-end" />
                   </Button>
 
-                  {/* REAL HISTORY BUTTON */}
                   <Button
                     onClick={openHistory}
                     variant="ghost"
@@ -541,12 +781,12 @@ export function Dashboard() {
                     </h2>
 
                     <p className="mt-1 text-[11px] text-slate-500">
-                      Based on your recent sessions
+                      Based on all of your sessions
                     </p>
                   </div>
 
                   <span className="text-xs font-medium text-indigo-300">
-                    This week
+                    All time
                   </span>
                 </div>
 
@@ -554,13 +794,16 @@ export function Dashboard() {
                   <div
                     className="relative flex size-28 shrink-0 items-center justify-center rounded-full"
                     style={{
-                      background:
-                        "conic-gradient(#818cf8 78%, rgba(255,255,255,.08) 0)",
+                      background: `conic-gradient(#818cf8 ${Math.round(
+                        stats.averageScore,
+                      )}%, rgba(255,255,255,.08) 0)`,
                     }}
                   >
                     <div className="flex size-20 flex-col items-center justify-center rounded-full bg-[#151823]">
                       <span className="text-2xl font-semibold text-white">
-                        78%
+                        {stats.count > 0
+                          ? `${Math.round(stats.averageScore)}%`
+                          : "—"}
                       </span>
 
                       <span className="text-[10px] text-slate-500">ready</span>
@@ -568,13 +811,25 @@ export function Dashboard() {
                   </div>
 
                   <div className="grid flex-1 gap-3 sm:grid-cols-2">
-                    <Progress label="Technical Knowledge" value={86} />
+                    <Progress
+                      label="Correctness"
+                      value={stats.skillAverages.correctness}
+                    />
 
-                    <Progress label="Communication" value={78} />
+                    <Progress
+                      label="Clarity"
+                      value={stats.skillAverages.clarity}
+                    />
 
-                    <Progress label="Problem Solving" value={81} />
+                    <Progress
+                      label="Completeness"
+                      value={stats.skillAverages.completeness}
+                    />
 
-                    <Progress label="Confidence" value={73} />
+                    <Progress
+                      label="Relevance"
+                      value={stats.skillAverages.relevance}
+                    />
                   </div>
                 </div>
               </section>
@@ -582,23 +837,31 @@ export function Dashboard() {
               <section className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-2">
                 <StatCard
                   label="Interviews Completed"
-                  value="24"
-                  note="↑ 12% this month"
+                  value={String(stats.count)}
+                  note={
+                    stats.count > 0
+                      ? "Keep practicing"
+                      : "Complete your first interview"
+                  }
                   icon={BriefcaseBusiness}
                   tone="bg-indigo-500/15 text-indigo-300"
                 />
 
                 <StatCard
                   label="Average Score"
-                  value="82%"
-                  note="↑ 6.4% overall"
+                  value={
+                    stats.count > 0 ? `${Math.round(stats.averageScore)}%` : "—"
+                  }
+                  note="Across all sessions"
                   icon={TrendingUp}
                   tone="bg-emerald-500/15 text-emerald-300"
                 />
 
                 <StatCard
                   label="Best Score"
-                  value="94%"
+                  value={
+                    stats.count > 0 ? `${Math.round(stats.bestScore)}%` : "—"
+                  }
                   note="Personal best"
                   icon={Target}
                   tone="bg-violet-500/15 text-violet-300"
@@ -606,8 +869,8 @@ export function Dashboard() {
 
                 <StatCard
                   label="Current Streak"
-                  value="7 days"
-                  note="Keep it going"
+                  value={`${stats.streak} day${stats.streak === 1 ? "" : "s"}`}
+                  note={stats.streak > 0 ? "Keep it going" : "Start today"}
                   icon={Zap}
                   tone="bg-amber-500/15 text-amber-300"
                 />
@@ -627,17 +890,13 @@ export function Dashboard() {
                     </h2>
 
                     <p className="mt-1 text-[11px] text-slate-500">
-                      Your score trend over the last 7 months.
+                      Your score trend across recent sessions.
                     </p>
                   </div>
-
-                  <span className="rounded-md bg-emerald-400/10 px-2 py-1 text-[11px] font-semibold text-emerald-300">
-                    +12.4%
-                  </span>
                 </div>
 
                 <div className="mt-5">
-                  <PerformanceChart />
+                  <PerformanceChart data={chartData} />
                 </div>
               </section>
 
@@ -653,10 +912,22 @@ export function Dashboard() {
                 </div>
 
                 <div className="mt-6 flex flex-col gap-5">
-                  <Progress label="Correctness" value={86} />
-                  <Progress label="Clarity" value={78} />
-                  <Progress label="Completeness" value={81} />
-                  <Progress label="Relevance" value={89} />
+                  <Progress
+                    label="Correctness"
+                    value={stats.skillAverages.correctness}
+                  />
+                  <Progress
+                    label="Clarity"
+                    value={stats.skillAverages.clarity}
+                  />
+                  <Progress
+                    label="Completeness"
+                    value={stats.skillAverages.completeness}
+                  />
+                  <Progress
+                    label="Relevance"
+                    value={stats.skillAverages.relevance}
+                  />
                 </div>
               </section>
             </div>
@@ -689,44 +960,59 @@ export function Dashboard() {
               </div>
 
               <div className="mt-5 flex flex-col gap-2">
-                {interviews.map((item) => (
-                  <div
-                    key={item.role}
-                    className="flex flex-wrap items-center gap-3 rounded-lg border border-white/[0.06] bg-white/[0.015] p-3 transition-colors hover:bg-white/[0.04] md:flex-nowrap"
-                  >
-                    <div className="flex size-8 items-center justify-center rounded-lg bg-indigo-500/10 text-[10px] font-bold text-indigo-300">
-                      {item.initials}
-                    </div>
-
-                    <div className="min-w-[170px] flex-1">
-                      <p className="text-xs font-medium text-slate-200">
-                        {item.role}
-                      </p>
-
-                      <p className="mt-1 text-[11px] text-slate-500">
-                        {item.type} · {item.date}
-                      </p>
-                    </div>
-
-                    <Difficulty value={item.difficulty} />
-
-                    <span className="text-lg font-semibold text-white">
-                      {item.score}%
-                    </span>
-
-                    <span className="hidden rounded-md bg-emerald-400/10 px-2 py-1 text-[10px] font-medium text-emerald-300 sm:inline">
-                      Completed
-                    </span>
-
-                    <button
-                      onClick={openHistory}
-                      className="text-xs font-medium text-indigo-300 hover:text-indigo-200"
+                {loadingInterviews ? (
+                  <p className="py-6 text-center text-xs text-slate-500">
+                    Loading your interviews...
+                  </p>
+                ) : recentInterviews.length === 0 ? (
+                  <p className="py-6 text-center text-xs text-slate-500">
+                    No interviews yet — start one to see it here.
+                  </p>
+                ) : (
+                  recentInterviews.map((item) => (
+                    <div
+                      key={item.interviewId}
+                      className="flex flex-wrap items-center gap-3 rounded-lg border border-white/[0.06] bg-white/[0.015] p-3 transition-colors hover:bg-white/[0.04] md:flex-nowrap"
                     >
-                      View Report
-                      <ChevronRight className="inline size-3" />
-                    </button>
-                  </div>
-                ))}
+                      <div className="flex size-8 items-center justify-center rounded-lg bg-indigo-500/10 text-[10px] font-bold text-indigo-300">
+                        {formatInterviewType(item.interviewType)
+                          .slice(0, 2)
+                          .toUpperCase()}
+                      </div>
+
+                      <div className="min-w-[170px] flex-1">
+                        <p className="text-xs font-medium text-slate-200">
+                          {formatRole(item.role)}
+                        </p>
+
+                        <p className="mt-1 text-[11px] text-slate-500">
+                          {formatInterviewType(item.interviewType)} ·{" "}
+                          {formatShortDate(item.completedAt)}
+                        </p>
+                      </div>
+
+                      <Difficulty value={item.difficulty} />
+
+                      <span className="text-lg font-semibold text-white">
+                        {Math.round(item.overallScore * 10)}%
+                      </span>
+
+                      <span className="hidden rounded-md bg-emerald-400/10 px-2 py-1 text-[10px] font-medium text-emerald-300 sm:inline">
+                        Completed
+                      </span>
+
+                      <button
+                        onClick={() =>
+                          router.push(`/history/${item.interviewId}`)
+                        }
+                        className="text-xs font-medium text-indigo-300 hover:text-indigo-200"
+                      >
+                        View Report
+                        <ChevronRight className="inline size-3" />
+                      </button>
+                    </div>
+                  ))
+                )}
               </div>
             </section>
 
@@ -741,7 +1027,6 @@ export function Dashboard() {
                 </h2>
 
                 <div className="mt-4 grid gap-2 sm:grid-cols-3 lg:grid-cols-1">
-                  {/* START INTERVIEW */}
                   <button
                     onClick={startInterview}
                     className="flex items-center gap-3 rounded-lg border border-indigo-400/15 bg-indigo-500/10 p-3 text-left text-xs font-medium text-indigo-200 transition hover:bg-indigo-500/15"
@@ -751,7 +1036,6 @@ export function Dashboard() {
                     <ChevronRight className="ml-auto size-3" />
                   </button>
 
-                  {/* PERFORMANCE */}
                   <button
                     onClick={openPerformance}
                     className="flex items-center gap-3 rounded-lg border border-white/[0.07] p-3 text-left text-xs font-medium text-slate-300 transition hover:bg-white/[0.05]"
@@ -761,7 +1045,6 @@ export function Dashboard() {
                     <ChevronRight className="ml-auto size-3 text-slate-500" />
                   </button>
 
-                  {/* HISTORY */}
                   <button
                     onClick={openHistory}
                     className="flex items-center gap-3 rounded-lg border border-white/[0.07] p-3 text-left text-xs font-medium text-slate-300 transition hover:bg-white/[0.05]"
@@ -783,10 +1066,22 @@ export function Dashboard() {
                   </div>
 
                   <p className="mt-4 max-w-xl text-sm leading-6 text-slate-300">
-                    Your technical correctness has improved by{" "}
-                    <span className="font-semibold text-indigo-200">14%</span>{" "}
-                    across your last 5 interviews. Focus next on answer clarity
-                    and structured explanations.
+                    {weakestSkill ? (
+                      <>
+                        Your{" "}
+                        <span className="font-semibold text-indigo-200">
+                          {formatDifficultyLabel(weakestSkill[0])}
+                        </span>{" "}
+                        score is your lowest area right now, averaging{" "}
+                        <span className="font-semibold text-indigo-200">
+                          {Math.round(weakestSkill[1])}%
+                        </span>
+                        . Focus your next few sessions there to raise your
+                        overall readiness.
+                      </>
+                    ) : (
+                      "Complete a few interviews and I'll surface personalized insights here."
+                    )}
                   </p>
 
                   <button

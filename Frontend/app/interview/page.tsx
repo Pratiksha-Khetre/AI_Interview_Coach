@@ -4,6 +4,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useAuth } from "@/lib/auth-context";
+import { saveInterviewReport } from "@/lib/interviews-store";
 
 interface SpeechRecognitionEvent extends Event {
   results: SpeechRecognitionResultList;
@@ -150,6 +152,7 @@ function clearActiveInterview() {
 
 export default function InterviewPage() {
   const router = useRouter();
+  const { user } = useAuth();
 
   // ============================================================
   // STAGE
@@ -895,6 +898,31 @@ export default function InterviewPage() {
         setAnswer("");
 
         setStage("completed");
+
+        // --------------------------------------------------------
+        // Persist the report to Firestore under this user's profile
+        // so the dashboard can show real history instead of demo
+        // data. Fire-and-forget: a save failure shouldn't block the
+        // user from seeing their results.
+        // --------------------------------------------------------
+
+        if (user && data.report) {
+          saveInterviewReport(user.uid, {
+            interviewId,
+            role,
+            interviewType,
+            difficulty,
+            duration: Number(duration) || 0,
+            correctness: data.report.correctness,
+            clarity: data.report.clarity,
+            completeness: data.report.completeness,
+            relevance: data.report.relevance,
+            overallScore: data.report.overall_score,
+            communicationAnalysis: data.report.communication_analysis ?? null,
+          }).catch((err) => {
+            console.error("Failed to save interview report to Firestore:", err);
+          });
+        }
 
         return;
       }
@@ -1666,7 +1694,7 @@ export default function InterviewPage() {
                 </button>
 
                 <button
-                  onClick={() => router.push("/dashboard")}
+                  onClick={() => router.push("/")}
                   className="rounded-xl border border-white/10 bg-white/[0.03] px-5 py-3 text-sm font-medium text-zinc-200 transition hover:bg-white/[0.08]"
                 >
                   Back to Dashboard
