@@ -4,14 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes.interview import router as interview_router
 from app.api.routes.resume import router as resume_router
 
-
 app = FastAPI()
-
-
-@app.get("/health")
-def health():
-    return {"status": "ok"}
-
 
 app.add_middleware(
     CORSMiddleware,
@@ -23,6 +16,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
 
 app.include_router(interview_router)
 app.include_router(resume_router)
